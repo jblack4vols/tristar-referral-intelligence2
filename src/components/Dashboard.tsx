@@ -1,18 +1,33 @@
 'use client'
 
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  LineChart, Line, Legend, CartesianGrid, AreaChart, Area, ComposedChart
-} from 'recharts'
+import { useSearchParams, useRouter } from 'next/navigation'
 import {
   parseExcelFile, processData,
+  type DataSet, type ProcessedData,
   type DataSet, type ProcessedData, type RawCase, type PhysicianRanking
 } from '@/lib/dataEngine'
 import {
-  supabase, saveDataset, saveCases, saveProcessedKPIs,
-  loadDatasets, loadCases, loadProcessedKPIs, deleteDataset
+  saveDataset, saveCases, saveProcessedKPIs,
+  loadDatasets, loadCases, loadProcessedKPIs, deleteDataset, dbCaseToRawCase,
 } from '@/lib/supabase'
+import UploadScreen from './shared/UploadScreen'
+import Header from './shared/Header'
+import TabNav from './shared/TabNav'
+import ErrorToast from './shared/ErrorToast'
+import { TabSkeleton } from './shared/Skeleton'
+import { TABS } from './shared/constants'
+import SummaryTab from './tabs/SummaryTab'
+import KPITab from './tabs/KPITab'
+import RevenueTab from './tabs/RevenueTab'
+import PhysiciansTab from './tabs/PhysiciansTab'
+import AlertsTab from './tabs/AlertsTab'
+import FunnelTab from './tabs/FunnelTab'
+import OTPTTab from './tabs/OTPTTab'
+import LocationsTab from './tabs/LocationsTab'
+
+const AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
+const VALID_TAB_IDS = new Set(TABS.map((t) => t.id))
 
 const O = '#FF8200', P = '#FFEAD5', BK = '#000000', G = '#16A34A', R = '#DC2626', BL = '#2563EB', PU = '#7C3AED'
 const fmt = (n: number) => n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(0)}K` : `$${n}`
@@ -60,18 +75,56 @@ function AlertBadge({ category }: { category: string }) {
 }
 
 export default function Dashboard() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const initialTab = searchParams.get('tab') || 'summary'
+
   const [datasets, setDatasets] = useState<DataSet[]>([])
   const [data, setData] = useState<ProcessedData | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
-  const [tab, setTab] = useState('kpi')
-  const [search, setSearch] = useState('')
-  const [locFilter, setLocFilter] = useState('All')
+  const [tab, setTab] = useState(VALID_TAB_IDS.has(initialTab) ? initialTab : 'summary')
   const [status, setStatus] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [lastSaved, setLastSaved] = useState<Date | null>(null)
   const [physSort, setPhysSort] = useState<{ key: keyof PhysicianRanking | 'latestEvals'; dir: 'asc' | 'desc' }>({ key: 'weightedRev', dir: 'desc' })
   const [alertSearch, setAlertSearch] = useState('')
   const [alertCatFilter, setAlertCatFilter] = useState('All')
   const fileRef = useRef<HTMLInputElement>(null)
+  const dataRef = useRef<ProcessedData | null>(null)
+  const dirtyRef = useRef(false)
+
+  // Keep dataRef in sync
+  useEffect(() => { dataRef.current = data }, [data])
+
+  const showError = useCallback((msg: string) => {
+    console.error(msg)
+    setError(msg)
+  }, [])
+
+  // URL-based tab routing
+  const handleTabChange = useCallback((id: string) => {
+    setTab(id)
+    const params = new URLSearchParams(searchParams.toString())
+    params.set('tab', id)
+    router.replace(`?${params.toString()}`, { scroll: false })
+  }, [searchParams, router])
+
+  // Autosave: periodically save processed KPIs to Supabase
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (dirtyRef.current && dataRef.current) {
+        try {
+          await saveProcessedKPIs(dataRef.current)
+          dirtyRef.current = false
+          setLastSaved(new Date())
+        } catch {
+          // Silent — autosave is best-effort
+        }
+      }
+    }, AUTOSAVE_INTERVAL_MS)
+    return () => clearInterval(interval)
+  }, [])
 
   // Load from Supabase on mount
   useEffect(() => {
@@ -79,29 +132,26 @@ export default function Dashboard() {
       setLoading(true)
       setStatus('Loading saved data...')
       try {
-        // Try loading cached KPIs first
         const cached = await loadProcessedKPIs()
         const dbDatasets = await loadDatasets()
 
         if (cached && dbDatasets.length > 0) {
-          // Reconstruct dataset labels
-          const ds: DataSet[] = dbDatasets.map((d: any) => ({
+          const ds: DataSet[] = dbDatasets.map((d) => ({
             label: d.label,
             year: d.year,
             startDate: d.start_date || '',
             endDate: d.end_date || '',
-            cases: [], // We don't need to reload all cases if we have cached KPIs
+            cases: [],
           }))
           setDatasets(ds)
-          setData(cached as ProcessedData)
+          setData(cached)
           setStatus('')
         } else if (dbDatasets.length > 0) {
-          // Have datasets but no cached KPIs — recompute
           setStatus('Recomputing from saved data...')
           const allCases = await loadCases()
-          const ds: DataSet[] = dbDatasets.map((d: any) => {
+          const ds: DataSet[] = dbDatasets.map((d) => {
             const dCases = allCases
-              .filter((c: any) => c.dataset_id === d.id)
+              .filter((c) => c.dataset_id === d.id)
               .map(dbCaseToRawCase)
             return {
               label: d.label, year: d.year,
@@ -113,18 +163,20 @@ export default function Dashboard() {
           const processed = processData(ds)
           setData(processed)
           await saveProcessedKPIs(processed)
+          setLastSaved(new Date())
           setStatus('')
         } else {
           setStatus('')
         }
       } catch (err) {
-        console.error('Init error:', err)
-        setStatus('Error loading — start by uploading files')
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        showError(`Failed to load saved data: ${msg}. Upload files to start fresh.`)
+        setStatus('')
       }
       setLoading(false)
     }
     init()
-  }, [])
+  }, [showError])
 
   const handleFiles = useCallback(async (files: FileList) => {
     setUploading(true)
@@ -134,10 +186,16 @@ export default function Dashboard() {
       if (!file.name.match(/\.xlsx?$/i)) continue
       setStatus(`Parsing ${file.name}...`)
 
-      const buf = await file.arrayBuffer()
-      const ds = parseExcelFile(buf, file.name)
+      let ds: DataSet
+      try {
+        const buf = await file.arrayBuffer()
+        ds = parseExcelFile(buf, file.name)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        showError(`Failed to parse ${file.name}: ${msg}`)
+        continue
+      }
 
-      // Save to Supabase
       setStatus(`Saving ${ds.year} to database (${ds.cases.length} cases)...`)
       try {
         const dbDs = await saveDataset({
@@ -147,11 +205,10 @@ export default function Dashboard() {
         })
         await saveCases(dbDs.id, ds.cases)
       } catch (err) {
-        console.error('Save error:', err)
-        setStatus(`Error saving ${file.name} — processing locally`)
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        showError(`Failed to save ${file.name} to database: ${msg}. Data processed locally only.`)
       }
 
-      // Update local state
       const idx = newDs.findIndex(d => d.year === ds.year)
       if (idx >= 0) newDs[idx] = ds
       else newDs.push(ds)
@@ -163,33 +220,44 @@ export default function Dashboard() {
     setStatus('Computing analytics...')
     const processed = processData(newDs)
     setData(processed)
+    dirtyRef.current = true
 
-    // Cache processed KPIs
     try {
       await saveProcessedKPIs(processed)
+      dirtyRef.current = false
+      setLastSaved(new Date())
     } catch (err) {
-      console.error('Cache error:', err)
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      showError(`Failed to cache analytics: ${msg}`)
     }
 
     setStatus('')
     setUploading(false)
-  }, [datasets])
+  }, [datasets, showError])
 
   const removeDs = useCallback(async (year: number) => {
     try {
       await deleteDataset(year)
-    } catch (err) { console.error(err) }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      showError(`Failed to delete ${year} from database: ${msg}`)
+    }
 
     const updated = datasets.filter(d => d.year !== year)
     setDatasets(updated)
     if (updated.length > 0) {
       const processed = processData(updated)
       setData(processed)
-      try { await saveProcessedKPIs(processed) } catch { }
+      dirtyRef.current = true
+      try {
+        await saveProcessedKPIs(processed)
+        dirtyRef.current = false
+        setLastSaved(new Date())
+      } catch { /* best-effort */ }
     } else {
       setData(null)
     }
-  }, [datasets])
+  }, [datasets, showError])
 
   const allLocations = useMemo(() => {
     if (!data) return ['All']
@@ -198,54 +266,23 @@ export default function Dashboard() {
 
   const years = useMemo(() => data?.annualKPIs.map(a => a.year) || [], [data])
 
-  // ============================================================
-  // UPLOAD / LOADING SCREEN
-  // ============================================================
+  // Upload / loading screen
   if (!data) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-xl shadow-lg w-full max-w-lg p-8">
-          <div className="text-center">
-            <div className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ backgroundColor: O }}>
-              <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-            </div>
-            <h1 className="text-xl font-bold mb-1" style={{ color: O }}>Tristar PT — Referral Intelligence</h1>
-            <p className="text-sm text-gray-500 mb-6">Upload Created Cases Report files to begin</p>
-          </div>
-
-          <div
-            className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-orange-400 transition-colors"
-            onClick={() => fileRef.current?.click()}
-            onDragOver={e => { e.preventDefault() }}
-            onDrop={e => { e.preventDefault(); handleFiles(e.dataTransfer.files) }}
-          >
-            <svg className="w-10 h-10 mx-auto mb-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-            <p className="text-sm font-medium text-gray-600">Drop .xlsx files here or click to browse</p>
-            <p className="text-xs text-gray-400 mt-1">Upload multiple years for trend analysis</p>
-          </div>
-
-          <input ref={fileRef} type="file" accept=".xlsx,.xls" multiple className="hidden"
-            onChange={e => e.target.files && handleFiles(e.target.files)} />
-
-          {(loading || uploading) && (
-            <div className="mt-4 text-center">
-              <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
-                <div className="h-2 rounded-full animate-pulse" style={{ backgroundColor: O, width: '60%' }} />
-              </div>
-              <p className="text-xs text-gray-500">{status || 'Processing...'}</p>
-            </div>
-          )}
-
-          <p className="text-xs text-gray-400 text-center mt-4">Data persists in Supabase — come back anytime</p>
-        </div>
-      </div>
+      <>
+        <UploadScreen
+          fileRef={fileRef}
+          loading={loading}
+          uploading={uploading}
+          status={status}
+          onFiles={handleFiles}
+        />
+        {error && <ErrorToast message={error} onDismiss={() => setError(null)} />}
+      </>
     )
   }
 
+  const { annualKPIs, monthlyKPIs, locationKPIs, physicianRankings, alerts, funnel, zeroVisitAlerts, otPTSplit } = data
   // ============================================================
   // DASHBOARD
   // ============================================================
@@ -264,46 +301,48 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* HEADER */}
-      <div className="text-white px-4 py-3" style={{ backgroundColor: BK }}>
-        <div className="max-w-7xl mx-auto flex items-center justify-between flex-wrap gap-2">
-          <div>
-            <h1 className="text-lg font-bold" style={{ color: O }}>TRISTAR PT — Referral Intelligence</h1>
-            <p className="text-xs text-gray-400">{datasets.map(d => d.label).join(' · ')}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            {datasets.map(d => (
-              <span key={d.year} className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1" style={{ backgroundColor: '#333', color: O }}>
-                {d.year}
-                <button onClick={() => removeDs(d.year)} className="ml-0.5 hover:text-white text-gray-500">×</button>
-              </span>
-            ))}
-            <button onClick={() => fileRef.current?.click()}
-              className="text-xs px-3 py-1.5 rounded border border-gray-600 text-gray-300 hover:text-white hover:border-gray-400 transition-colors">
-              + Import Data
-            </button>
-            <input ref={fileRef} type="file" accept=".xlsx,.xls" multiple className="hidden"
-              onChange={e => { if (e.target.files) handleFiles(e.target.files); e.target.value = '' }} />
-          </div>
-        </div>
-        {status && <div className="max-w-7xl mx-auto"><p className="text-xs text-orange-300 mt-1">{status}</p></div>}
-      </div>
+      <Header
+        datasets={datasets}
+        status={status}
+        fileRef={fileRef}
+        onRemoveDs={removeDs}
+        onFiles={handleFiles}
+      />
+      <TabNav tab={tab} onTabChange={handleTabChange} />
 
-      {/* TAB NAV */}
-      <div className="bg-white border-b shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto flex overflow-x-auto">
-          {TABS.map(t => (
-            <button key={t.id} onClick={() => { setTab(t.id); setSearch(''); setLocFilter('All') }}
-              className={`px-4 py-2.5 text-xs font-semibold whitespace-nowrap border-b-2 transition-colors ${tab === t.id ? '' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-              style={tab === t.id ? { color: O, borderColor: O } : {}}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* CONTENT */}
       <div className="max-w-7xl mx-auto p-4 space-y-4">
+        {/* Autosave indicator */}
+        {lastSaved && (
+          <div className="text-right">
+            <span className="text-[10px] text-gray-400">
+              Last saved: {lastSaved.toLocaleTimeString()}
+            </span>
+          </div>
+        )}
+
+        {loading ? (
+          <TabSkeleton />
+        ) : (
+          <>
+            {tab === 'summary' && (
+              <SummaryTab
+                annualKPIs={annualKPIs}
+                alerts={alerts}
+                zeroVisitAlerts={zeroVisitAlerts}
+                locationKPIs={locationKPIs}
+                physicianRankings={physicianRankings}
+                years={years}
+              />
+            )}
+            {tab === 'kpi' && <KPITab annualKPIs={annualKPIs} monthlyKPIs={monthlyKPIs} years={years} />}
+            {tab === 'revenue' && <RevenueTab annualKPIs={annualKPIs} monthlyKPIs={monthlyKPIs} />}
+            {tab === 'physicians' && <PhysiciansTab physicianRankings={physicianRankings} years={years} allLocations={allLocations} />}
+            {tab === 'alerts' && <AlertsTab alerts={alerts} zeroVisitAlerts={zeroVisitAlerts} years={years} allLocations={allLocations} />}
+            {tab === 'funnel' && <FunnelTab funnel={funnel} years={years} />}
+            {tab === 'otpt' && <OTPTTab annualKPIs={annualKPIs} monthlyKPIs={monthlyKPIs} otPTSplit={otPTSplit} years={years} />}
+            {tab === 'locations' && <LocationsTab locationKPIs={locationKPIs} years={years} />}
+          </>
+        )}
 
         {/* KPI TRENDS */}
         {tab === 'kpi' && <>
@@ -765,33 +804,8 @@ export default function Dashboard() {
         </>}
 
       </div>
+
+      {error && <ErrorToast message={error} onDismiss={() => setError(null)} />}
     </div>
   )
-}
-
-// Convert DB row back to RawCase format for reprocessing
-function dbCaseToRawCase(c: any): RawCase {
-  return {
-    patientAccountNumber: c.patient_account_number || '',
-    patientName: c.patient_name || '',
-    caseTherapist: c.case_therapist || '',
-    caseFacility: c.case_facility || '',
-    referringDoctor: c.referring_doctor || '',
-    referringDoctorNPI: c.referring_doctor_npi || '',
-    referralSource: c.referral_source || '',
-    primaryPayerType: c.primary_payer_type || '',
-    primaryInsurance: c.primary_insurance || '',
-    arrivedVisits: c.arrived_visits || 0,
-    scheduledVisits: c.scheduled_visits || 0,
-    createdDate: c.created_date ? new Date(c.created_date) : null,
-    dateOfInitialEval: c.date_of_initial_eval ? new Date(c.date_of_initial_eval) : null,
-    dischargeDate: c.discharge_date ? new Date(c.discharge_date) : null,
-    dateOfFirstScheduledVisit: c.date_of_first_scheduled_visit ? new Date(c.date_of_first_scheduled_visit) : null,
-    dateOfFirstArrivedVisit: c.date_of_first_arrived_visit ? new Date(c.date_of_first_arrived_visit) : null,
-    discipline: c.discipline || '',
-    dischargeReason: c.discharge_reason || '',
-    year: c.year || 0,
-    isPhysician: c.is_physician || false,
-    isUHC: c.is_uhc || false,
-  }
 }
