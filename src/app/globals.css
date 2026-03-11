@@ -5,3 +5,10 @@
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
+
+@media print {
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .sticky { position: relative !important; }
+  button, input, select { display: none !important; }
+  .shadow-sm { box-shadow: none !important; border: 1px solid #e5e7eb; }
+}

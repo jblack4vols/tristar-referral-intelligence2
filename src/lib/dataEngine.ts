@@ -47,6 +47,10 @@ export interface ProcessedData {
   otPTSplit: OTPTRow[];
   payerMix: PayerMixRow[];
   lagAnalysis: LagAnalysisRow[];
+  referralSources: ReferralSourceRow[];
+  dischargeAnalysis: DischargeAnalysisRow[];
+  noShowAnalysis: NoShowAnalysisRow[];
+  monthlyForecast: MonthlyForecastRow[];
 }
 
 export interface AnnualKPI {
@@ -175,6 +179,46 @@ export interface LagAnalysisRow {
   avgCreatedToEvalDays: number;
   avgSchedToArriveDays: number;
   caseCount: number;
+}
+
+export interface ReferralSourceRow {
+  year: number;
+  source: string;
+  count: number;
+  pct: number;
+  arrivedPct: number;
+  avgVE: number;
+  weightedRev: number;
+}
+
+export interface DischargeAnalysisRow {
+  year: number;
+  location: string;
+  totalDischarged: number;
+  completedPlan: number;
+  completedPct: number;
+  droppedOut: number;
+  droppedPct: number;
+  avgVisitsCompleted: number;
+  avgVisitsDropped: number;
+}
+
+export interface NoShowAnalysisRow {
+  year: number;
+  location: string;
+  totalScheduled: number;
+  totalArrived: number;
+  noShowCount: number;
+  noShowRate: number;
+  estLostRev: number;
+}
+
+export interface MonthlyForecastRow {
+  month: string;
+  actual: number | null;
+  forecast: number | null;
+  actualRev: number | null;
+  forecastRev: number | null;
 }
 
 // ============================================================
@@ -330,6 +374,18 @@ export function processData(datasets: DataSet[]): ProcessedData {
   // Lag analysis
   const lagAnalysis = computeLagAnalysis(physCases, years);
 
+  // Referral source breakdown (ALL cases, not just physician)
+  const referralSources = computeReferralSources(allCases, years);
+
+  // Discharge analysis
+  const dischargeAnalysis = computeDischargeAnalysis(allCases, years);
+
+  // No-show analysis
+  const noShowAnalysis = computeNoShowAnalysis(allCases, years);
+
+  // Revenue forecast
+  const monthlyForecast = computeForecast(monthlyKPIs);
+
   return {
     datasets,
     annualKPIs,
@@ -342,6 +398,10 @@ export function processData(datasets: DataSet[]): ProcessedData {
     otPTSplit,
     payerMix,
     lagAnalysis,
+    referralSources,
+    dischargeAnalysis,
+    noShowAnalysis,
+    monthlyForecast,
   };
 }
 
@@ -682,6 +742,135 @@ function computeLagAnalysis(physCases: RawCase[], years: number[]): LagAnalysisR
       });
     }
   }
+  return results;
+}
+
+function computeReferralSources(allCases: RawCase[], years: number[]): ReferralSourceRow[] {
+  const results: ReferralSourceRow[] = [];
+  for (const yr of years) {
+    const yrCases = allCases.filter(c => c.year === yr);
+    const bySource = groupBy(yrCases, c => c.referralSource || 'Unknown');
+    for (const [source, grp] of Object.entries(bySource)) {
+      const arrived = grp.filter(c => c.arrivedVisits > 0).length;
+      const totalVisits = sum(grp, c => c.arrivedVisits);
+      const wRev = sum(grp, c => c.arrivedVisits * (PAYER_RPV[c.primaryPayerType] || DEFAULT_RPV));
+      results.push({
+        year: yr,
+        source,
+        count: grp.length,
+        pct: pct(grp.length, yrCases.length),
+        arrivedPct: pct(arrived, grp.length),
+        avgVE: rd(totalVisits / (grp.length || 1)),
+        weightedRev: wRev,
+      });
+    }
+  }
+  return results.sort((a, b) => b.count - a.count);
+}
+
+function computeDischargeAnalysis(allCases: RawCase[], years: number[]): DischargeAnalysisRow[] {
+  const results: DischargeAnalysisRow[] = [];
+  const COMPLETED_REASONS = ['completed', 'goals met', 'plan of care complete', 'discharged - goals met'];
+  for (const yr of years) {
+    const yrCases = allCases.filter(c => c.year === yr);
+    const byLoc = groupBy(yrCases, c => c.caseFacility);
+    for (const [loc, grp] of Object.entries(byLoc)) {
+      const discharged = grp.filter(c => c.dischargeDate !== null);
+      const completed = discharged.filter(c =>
+        COMPLETED_REASONS.some(r => c.dischargeReason.toLowerCase().includes(r))
+      );
+      const dropped = discharged.filter(c =>
+        !COMPLETED_REASONS.some(r => c.dischargeReason.toLowerCase().includes(r)) &&
+        c.dischargeReason !== ''
+      );
+      const completedVisits = completed.length > 0 ? sum(completed as any, (c: any) => c.arrivedVisits) / completed.length : 0;
+      const droppedVisits = dropped.length > 0 ? sum(dropped as any, (c: any) => c.arrivedVisits) / dropped.length : 0;
+      results.push({
+        year: yr,
+        location: loc.replace('Tristar PT - ', ''),
+        totalDischarged: discharged.length,
+        completedPlan: completed.length,
+        completedPct: pct(completed.length, discharged.length),
+        droppedOut: dropped.length,
+        droppedPct: pct(dropped.length, discharged.length),
+        avgVisitsCompleted: rd(completedVisits),
+        avgVisitsDropped: rd(droppedVisits),
+      });
+    }
+  }
+  return results;
+}
+
+function computeNoShowAnalysis(allCases: RawCase[], years: number[]): NoShowAnalysisRow[] {
+  const results: NoShowAnalysisRow[] = [];
+  for (const yr of years) {
+    const yrCases = allCases.filter(c => c.year === yr);
+    const byLoc = groupBy(yrCases, c => c.caseFacility);
+    for (const [loc, grp] of Object.entries(byLoc)) {
+      const totalSched = sum(grp, c => c.scheduledVisits);
+      const totalArrived = sum(grp, c => c.arrivedVisits);
+      const noShows = totalSched - totalArrived;
+      results.push({
+        year: yr,
+        location: loc.replace('Tristar PT - ', ''),
+        totalScheduled: totalSched,
+        totalArrived: totalArrived,
+        noShowCount: Math.max(0, noShows),
+        noShowRate: totalSched > 0 ? pct(Math.max(0, noShows), totalSched) : 0,
+        estLostRev: Math.max(0, noShows) * DEFAULT_RPV,
+      });
+    }
+  }
+  return results.sort((a, b) => b.noShowRate - a.noShowRate);
+}
+
+function computeForecast(monthlyKPIs: MonthlyKPI[]): MonthlyForecastRow[] {
+  if (monthlyKPIs.length < 6) return monthlyKPIs.map(m => ({
+    month: m.month, actual: m.totalCases, forecast: null, actualRev: m.weightedRev, forecastRev: null,
+  }));
+
+  const results: MonthlyForecastRow[] = monthlyKPIs.map(m => ({
+    month: m.month, actual: m.totalCases, forecast: null, actualRev: m.weightedRev, forecastRev: null,
+  }));
+
+  // Simple linear regression on last 12 months for cases and revenue
+  const recent = monthlyKPIs.slice(-12);
+  const n = recent.length;
+  const xMean = (n - 1) / 2;
+  const yMeanCases = recent.reduce((s, m) => s + m.totalCases, 0) / n;
+  const yMeanRev = recent.reduce((s, m) => s + m.weightedRev, 0) / n;
+
+  let numCases = 0, numRev = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    const xDiff = i - xMean;
+    numCases += xDiff * (recent[i].totalCases - yMeanCases);
+    numRev += xDiff * (recent[i].weightedRev - yMeanRev);
+    den += xDiff * xDiff;
+  }
+
+  const slopeCases = den !== 0 ? numCases / den : 0;
+  const interceptCases = yMeanCases - slopeCases * xMean;
+  const slopeRev = den !== 0 ? numRev / den : 0;
+  const interceptRev = yMeanRev - slopeRev * xMean;
+
+  // Project 6 months forward
+  const lastMonth = monthlyKPIs[monthlyKPIs.length - 1].month;
+  const [lastY, lastM] = lastMonth.split('-').map(Number);
+  for (let i = 1; i <= 6; i++) {
+    const fm = lastM + i;
+    const fy = lastY + Math.floor((fm - 1) / 12);
+    const fmAdj = ((fm - 1) % 12) + 1;
+    const monthStr = `${fy}-${String(fmAdj).padStart(2, '0')}`;
+    const x = n + i - 1;
+    results.push({
+      month: monthStr,
+      actual: null,
+      forecast: Math.max(0, Math.round(interceptCases + slopeCases * x)),
+      actualRev: null,
+      forecastRev: Math.max(0, Math.round(interceptRev + slopeRev * x)),
+    });
+  }
+
   return results;
 }
 

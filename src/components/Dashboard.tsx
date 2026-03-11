@@ -3,7 +3,8 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  LineChart, Line, Legend, CartesianGrid, AreaChart, Area, ComposedChart
+  LineChart, Line, Legend, CartesianGrid, AreaChart, Area, ComposedChart,
+  ReferenceLine, PieChart, Pie, Cell
 } from 'recharts'
 import {
   parseExcelFile, processData,
@@ -71,7 +72,40 @@ export default function Dashboard() {
   const [physSort, setPhysSort] = useState<{ key: keyof PhysicianRanking | 'latestEvals'; dir: 'asc' | 'desc' }>({ key: 'weightedRev', dir: 'desc' })
   const [alertSearch, setAlertSearch] = useState('')
   const [alertCatFilter, setAlertCatFilter] = useState('All')
+  const [compareLocs, setCompareLocs] = useState<string[]>([])
+  const [npiCache, setNpiCache] = useState<Record<string, { specialty: string; city: string; state: string }>>({})
   const fileRef = useRef<HTMLInputElement>(null)
+  const dashRef = useRef<HTMLDivElement>(null)
+
+  // NPI enrichment via NPPES public API
+  const enrichNPIs = useCallback(async () => {
+    if (!data) return
+    const npis = [...new Set(data.physicianRankings.map(p => p.npi))].filter(n => n && !npiCache[n])
+    if (npis.length === 0) return
+    setStatus(`Looking up ${npis.length} NPIs...`)
+    const batchSize = 10
+    const newCache = { ...npiCache }
+    for (let i = 0; i < Math.min(npis.length, 100); i++) {
+      try {
+        const url = `https://npiregistry.cms.hhs.gov/api/?version=2.1&number=${npis[i]}&limit=1`
+        const resp = await fetch(url)
+        const json = await resp.json()
+        const result = json.results?.[0]
+        if (result) {
+          const taxonomy = result.taxonomies?.find((t: any) => t.primary) || result.taxonomies?.[0]
+          const addr = result.addresses?.find((a: any) => a.address_purpose === 'LOCATION') || result.addresses?.[0]
+          newCache[npis[i]] = {
+            specialty: taxonomy?.desc || '',
+            city: addr?.city || '',
+            state: addr?.state || '',
+          }
+        }
+        if (i % 10 === 0) setStatus(`Looking up NPIs... ${i + 1}/${Math.min(npis.length, 100)}`)
+      } catch { /* continue on error */ }
+    }
+    setNpiCache(newCache)
+    setStatus('')
+  }, [data, npiCache])
 
   // Load from Supabase on mount
   useEffect(() => {
@@ -249,16 +283,20 @@ export default function Dashboard() {
   // ============================================================
   // DASHBOARD
   // ============================================================
-  const { annualKPIs, monthlyKPIs, locationKPIs, physicianRankings, alerts, funnel, zeroVisitAlerts, otPTSplit, payerMix, lagAnalysis } = data
+  const { annualKPIs, monthlyKPIs, locationKPIs, physicianRankings, alerts, funnel, zeroVisitAlerts, otPTSplit, payerMix, lagAnalysis, referralSources, dischargeAnalysis, noShowAnalysis, monthlyForecast } = data
   const ly = years[years.length - 1], py = years.length > 1 ? years[years.length - 2] : null
   const la = annualKPIs.find(a => a.year === ly), pa = py ? annualKPIs.find(a => a.year === py) : null
   const mf = monthlyKPIs.filter(m => m.totalCases >= 50)
 
   const TABS = [
     { id: 'kpi', label: 'KPI Trends' }, { id: 'revenue', label: 'Revenue' },
+    { id: 'forecast', label: 'Forecast' },
     { id: 'physicians', label: 'Physicians' }, { id: 'alerts', label: 'Alerts' },
-    { id: 'funnel', label: 'Funnel' }, { id: 'otpt', label: 'OT vs PT' },
+    { id: 'funnel', label: 'Funnel' }, { id: 'sources', label: 'Referral Sources' },
+    { id: 'discharge', label: 'Outcomes' }, { id: 'noshow', label: 'No-Shows' },
+    { id: 'otpt', label: 'OT vs PT' },
     { id: 'payer', label: 'Payer Mix' }, { id: 'lag', label: 'Speed to Care' },
+    { id: 'compare', label: 'Compare' },
     { id: 'locations', label: 'Locations' },
   ]
 
@@ -281,6 +319,10 @@ export default function Dashboard() {
             <button onClick={() => fileRef.current?.click()}
               className="text-xs px-3 py-1.5 rounded border border-gray-600 text-gray-300 hover:text-white hover:border-gray-400 transition-colors">
               + Import Data
+            </button>
+            <button onClick={() => window.print()}
+              className="text-xs px-3 py-1.5 rounded border border-gray-600 text-gray-300 hover:text-white hover:border-gray-400 transition-colors">
+              Print
             </button>
             <input ref={fileRef} type="file" accept=".xlsx,.xls" multiple className="hidden"
               onChange={e => { if (e.target.files) handleFiles(e.target.files); e.target.value = '' }} />
@@ -343,7 +385,9 @@ export default function Dashboard() {
               <ResponsiveContainer width="100%" height={180}>
                 <LineChart data={mf}><CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 8 }} interval={4} /><YAxis domain={['auto', 'auto']} tick={{ fontSize: 10 }} />
-                  <Tooltip /><Line type="monotone" dataKey="tierAPct" stroke={G} strokeWidth={2} dot={{ r: 1.5 }} />
+                  <Tooltip />
+                  <ReferenceLine y={50} stroke={R} strokeDasharray="4 4" label={{ value: 'Goal 50%', fontSize: 9, fill: R }} />
+                  <Line type="monotone" dataKey="tierAPct" stroke={G} strokeWidth={2} dot={{ r: 1.5 }} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -352,7 +396,9 @@ export default function Dashboard() {
               <ResponsiveContainer width="100%" height={180}>
                 <LineChart data={mf}><CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 8 }} interval={4} /><YAxis domain={[55, 90]} tick={{ fontSize: 10 }} />
-                  <Tooltip /><Line type="monotone" dataKey="arriveRate" stroke={R} strokeWidth={2} dot={{ r: 1.5 }} />
+                  <Tooltip />
+                  <ReferenceLine y={80} stroke={G} strokeDasharray="4 4" label={{ value: 'Goal 80%', fontSize: 9, fill: G }} />
+                  <Line type="monotone" dataKey="arriveRate" stroke={R} strokeWidth={2} dot={{ r: 1.5 }} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -401,10 +447,60 @@ export default function Dashboard() {
                 <YAxis yAxisId="rev" tick={{ fontSize: 9 }} tickFormatter={(v: number) => fmt(v)} />
                 <YAxis yAxisId="rpv" orientation="right" domain={[85, 105]} tick={{ fontSize: 9 }} tickFormatter={(v: number) => `$${v}`} />
                 <Tooltip /><Legend wrapperStyle={{ fontSize: 11 }} />
+                <ReferenceLine yAxisId="rpv" y={95} stroke={G} strokeDasharray="4 4" label={{ value: '$95 target', fontSize: 9, fill: G }} />
                 <Bar yAxisId="rev" dataKey="weightedRev" name="Revenue" fill={O} radius={[2, 2, 0, 0]} />
                 <Line yAxisId="rpv" type="monotone" dataKey="avgRPV" name="RPV" stroke={BK} strokeWidth={2} dot={{ r: 1.5 }} />
               </ComposedChart>
             </ResponsiveContainer>
+          </div>
+        </>}
+
+        {/* FORECAST */}
+        {tab === 'forecast' && <>
+          <div className="bg-white rounded-lg p-4 shadow-sm">
+            <h3 className="text-sm font-bold mb-2" style={{ color: O }}>Cases Forecast (6-Month Projection)</h3>
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={monthlyForecast?.slice(-24) || []}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="month" tick={{ fontSize: 8 }} interval={2} angle={-45} textAnchor="end" height={40} />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="actual" name="Actual Cases" fill={O} radius={[2, 2, 0, 0]} />
+                <Line type="monotone" dataKey="forecast" name="Forecast" stroke={PU} strokeWidth={2} strokeDasharray="6 3" dot={{ r: 2 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="bg-white rounded-lg p-4 shadow-sm">
+            <h3 className="text-sm font-bold mb-2" style={{ color: O }}>Revenue Forecast</h3>
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={monthlyForecast?.slice(-24) || []}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="month" tick={{ fontSize: 8 }} interval={2} angle={-45} textAnchor="end" height={40} />
+                <YAxis tick={{ fontSize: 9 }} tickFormatter={(v: number) => fmt(v)} />
+                <Tooltip formatter={(v: any) => fmt(v)} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="actualRev" name="Actual Revenue" fill={G} radius={[2, 2, 0, 0]} />
+                <Line type="monotone" dataKey="forecastRev" name="Forecast" stroke={PU} strokeWidth={2} strokeDasharray="6 3" dot={{ r: 2 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="bg-white rounded-lg p-4 shadow-sm">
+            <h3 className="text-sm font-bold mb-2" style={{ color: O }}>Projected Months</h3>
+            <table className="w-full text-xs">
+              <thead><tr style={{ backgroundColor: PU }} className="text-white">
+                <th className="px-2 py-1.5 text-left">Month</th>
+                <th className="px-2 py-1.5 text-center">Projected Cases</th>
+                <th className="px-2 py-1.5 text-center">Projected Revenue</th>
+              </tr></thead>
+              <tbody>{(monthlyForecast || []).filter(m => m.forecast !== null).map((m, i) => (
+                <tr key={i} className={i % 2 ? '' : 'bg-purple-50/40'}>
+                  <td className="px-2 py-1 font-medium">{m.month}</td>
+                  <td className="px-2 py-1 text-center">{fmtN(m.forecast || 0)}</td>
+                  <td className="px-2 py-1 text-center font-bold">{fmt(m.forecastRev || 0)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
           </div>
         </>}
 
@@ -439,10 +535,15 @@ export default function Dashboard() {
               <select value={locFilter} onChange={e => setLocFilter(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white">
                 {allLocations.map(l => <option key={l}>{l}</option>)}
               </select>
+              <button onClick={enrichNPIs}
+                className="text-xs px-3 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                title="Lookup specialties from NPI Registry">
+                Enrich NPIs
+              </button>
               <button onClick={() => exportCSV(
-                ['#', 'Physician', 'NPI', 'Location', ...years.map(String), 'Wt. Rev', 'V/E', 'Tier A %', 'Trend'],
+                ['#', 'Physician', 'NPI', 'Specialty', 'Location', ...years.map(String), 'Wt. Rev', 'V/E', 'Tier A %', 'Trend'],
                 filteredPhys.slice(0, 500).map((p, i) => [
-                  String(i + 1), p.physician, p.npi, p.location,
+                  String(i + 1), p.physician, p.npi, npiCache[p.npi]?.specialty || '', p.location,
                   ...years.map(y => String(p.yearData[y]?.evals || 0)),
                   String(p.weightedRev), String(p.avgVE), `${p.tierAPct}%`, p.trend
                 ]),
@@ -455,7 +556,9 @@ export default function Dashboard() {
             <div className="bg-white rounded-lg shadow-sm overflow-x-auto">
               <table className="w-full text-[10px]">
                 <thead><tr style={{ backgroundColor: O }} className="text-white">
-                  <th className="px-2 py-1.5">#</th><th className="px-2 py-1.5 text-left">Physician</th><th className="px-2 py-1.5 text-left">Location</th>
+                  <th className="px-2 py-1.5">#</th><th className="px-2 py-1.5 text-left">Physician</th>
+                  {Object.keys(npiCache).length > 0 && <th className="px-2 py-1.5 text-left">Specialty</th>}
+                  <th className="px-2 py-1.5 text-left">Location</th>
                   {years.map(y => y === ly
                     ? <th key={y} className="px-2 py-1.5 text-center cursor-pointer select-none hover:text-orange-200"
                         onClick={() => setPhysSort(prev => prev.key === 'latestEvals' ? { key: 'latestEvals', dir: prev.dir === 'desc' ? 'asc' : 'desc' } : { key: 'latestEvals', dir: 'desc' })}>
@@ -475,6 +578,7 @@ export default function Dashboard() {
                       <tr key={`${p.npi}-${p.location}`} className={i % 2 ? 'bg-orange-50/30' : ''}>
                         <td className="px-2 py-1 text-gray-400">{i + 1}</td>
                         <td className="px-2 py-1 font-medium">{p.physician}</td>
+                        {Object.keys(npiCache).length > 0 && <td className="px-2 py-1 text-gray-500 text-[9px]">{npiCache[p.npi]?.specialty || ''}</td>}
                         <td className="px-2 py-1 text-gray-500">{p.location}</td>
                         {years.map(y => <td key={y} className="px-2 py-1 text-center">{p.yearData[y]?.evals || 0}</td>)}
                         <td className="px-2 py-1 text-center font-bold">{fmt(p.weightedRev)}</td>
@@ -608,6 +712,140 @@ export default function Dashboard() {
           ))}
         </>}
 
+        {/* REFERRAL SOURCES */}
+        {tab === 'sources' && <>
+          {years.map(yr => {
+            const yrSources = (referralSources || []).filter(s => s.year === yr).sort((a, b) => b.count - a.count)
+            const PIE_COLORS = [O, BL, G, PU, R, '#F59E0B', '#6B7280', '#0891B2', '#EC4899', '#84CC16']
+            return (
+              <div key={yr} className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-bold mb-3" style={{ color: O }}>{yr} Referral Sources — All Cases</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <ResponsiveContainer width="100%" height={250}>
+                    <PieChart>
+                      <Pie data={yrSources.slice(0, 8)} dataKey="pct" nameKey="source" cx="50%" cy="50%" outerRadius={90}
+                        label={({ source, pct }: any) => `${source}: ${pct}%`} labelLine={{ strokeWidth: 1 }} style={{ fontSize: 9 }}>
+                        {yrSources.slice(0, 8).map((_, idx) => (
+                          <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(v: any) => `${v}%`} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <table className="text-xs self-start">
+                    <thead><tr style={{ backgroundColor: O }} className="text-white">
+                      <th className="px-2 py-1.5 text-left">Source</th>
+                      <th className="px-2 py-1.5 text-center">Cases</th><th className="px-2 py-1.5 text-center">%</th>
+                      <th className="px-2 py-1.5 text-center">Arrive %</th><th className="px-2 py-1.5 text-center">V/E</th>
+                      <th className="px-2 py-1.5 text-center">Wt. Rev</th>
+                    </tr></thead>
+                    <tbody>{yrSources.map((s, i) => (
+                      <tr key={i} className={i % 2 ? '' : 'bg-orange-50/40'}>
+                        <td className="px-2 py-1 font-medium">{s.source}</td>
+                        <td className="px-2 py-1 text-center">{fmtN(s.count)}</td>
+                        <td className="px-2 py-1 text-center">{s.pct}%</td>
+                        <td className={`px-2 py-1 text-center ${s.arrivedPct < 70 ? 'text-red-600' : ''}`}>{s.arrivedPct}%</td>
+                        <td className="px-2 py-1 text-center">{s.avgVE}</td>
+                        <td className="px-2 py-1 text-center font-bold">{fmt(s.weightedRev)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )
+          })}
+        </>}
+
+        {/* DISCHARGE OUTCOMES */}
+        {tab === 'discharge' && <>
+          {years.map(yr => {
+            const yrDC = (dischargeAnalysis || []).filter(d => d.year === yr).sort((a, b) => a.completedPct - b.completedPct)
+            const totals = yrDC.reduce((s, d) => ({
+              dc: s.dc + d.totalDischarged, comp: s.comp + d.completedPlan, drop: s.drop + d.droppedOut
+            }), { dc: 0, comp: 0, drop: 0 })
+            return (
+              <div key={yr} className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-bold mb-2" style={{ color: O }}>{yr} Discharge Outcomes</h3>
+                <div className="grid grid-cols-3 gap-3 mb-3">
+                  <Stat label="Total Discharged" value={fmtN(totals.dc)} />
+                  <Stat label="Completed Plan" value={fmtN(totals.comp)} sub={totals.dc > 0 ? `${Math.round(totals.comp / totals.dc * 100)}%` : ''} color={G} />
+                  <Stat label="Dropped Out" value={fmtN(totals.drop)} sub={totals.dc > 0 ? `${Math.round(totals.drop / totals.dc * 100)}%` : ''} color={R} />
+                </div>
+                <table className="w-full text-xs">
+                  <thead><tr style={{ backgroundColor: O }} className="text-white">
+                    <th className="px-2 py-1.5 text-left">Location</th>
+                    <th className="px-2 py-1.5 text-center">Discharged</th>
+                    <th className="px-2 py-1.5 text-center">Completed %</th>
+                    <th className="px-2 py-1.5 text-center">Dropped %</th>
+                    <th className="px-2 py-1.5 text-center">Avg Visits (Completed)</th>
+                    <th className="px-2 py-1.5 text-center">Avg Visits (Dropped)</th>
+                  </tr></thead>
+                  <tbody>{yrDC.map((d, i) => (
+                    <tr key={i} className={d.completedPct < 40 ? 'bg-red-50' : i % 2 ? '' : 'bg-orange-50/40'}>
+                      <td className="px-2 py-1 font-medium">{d.location}</td>
+                      <td className="px-2 py-1 text-center">{d.totalDischarged}</td>
+                      <td className={`px-2 py-1 text-center font-medium ${d.completedPct >= 50 ? 'text-green-600' : d.completedPct >= 30 ? 'text-orange-600' : 'text-red-600'}`}>{d.completedPct}%</td>
+                      <td className={`px-2 py-1 text-center ${d.droppedPct > 50 ? 'text-red-600 font-medium' : ''}`}>{d.droppedPct}%</td>
+                      <td className="px-2 py-1 text-center">{d.avgVisitsCompleted}</td>
+                      <td className="px-2 py-1 text-center text-gray-500">{d.avgVisitsDropped}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            )
+          })}
+        </>}
+
+        {/* NO-SHOW ANALYSIS */}
+        {tab === 'noshow' && <>
+          {years.map(yr => {
+            const yrNS = (noShowAnalysis || []).filter(n => n.year === yr).sort((a, b) => b.noShowRate - a.noShowRate)
+            const totals = yrNS.reduce((s, n) => ({
+              sched: s.sched + n.totalScheduled, arrived: s.arrived + n.totalArrived, lost: s.lost + n.estLostRev
+            }), { sched: 0, arrived: 0, lost: 0 })
+            return (
+              <div key={yr} className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-bold mb-2" style={{ color: O }}>{yr} No-Show / Cancellation Analysis</h3>
+                <div className="grid grid-cols-3 gap-3 mb-3">
+                  <Stat label="Total Scheduled" value={fmtN(totals.sched)} />
+                  <Stat label="No-Show Rate" value={totals.sched > 0 ? `${Math.round((totals.sched - totals.arrived) / totals.sched * 100)}%` : '0%'} color={R} />
+                  <Stat label="Est. Lost Revenue" value={fmt(totals.lost)} sub="From missed visits" color={R} />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <ResponsiveContainer width="100%" height={Math.max(200, yrNS.length * 28)}>
+                    <BarChart data={yrNS} layout="vertical" margin={{ left: 90 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis type="number" tickFormatter={(v: number) => `${v}%`} tick={{ fontSize: 10 }} />
+                      <YAxis dataKey="location" type="category" tick={{ fontSize: 10 }} width={90} />
+                      <Tooltip />
+                      <ReferenceLine x={15} stroke={R} strokeDasharray="4 4" label={{ value: '15% threshold', fontSize: 9, fill: R }} />
+                      <Bar dataKey="noShowRate" name="No-Show %" fill={R} radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <table className="text-xs self-start">
+                    <thead><tr style={{ backgroundColor: O }} className="text-white">
+                      <th className="px-2 py-1.5 text-left">Location</th>
+                      <th className="px-2 py-1.5 text-center">Scheduled</th>
+                      <th className="px-2 py-1.5 text-center">Arrived</th>
+                      <th className="px-2 py-1.5 text-center">No-Show %</th>
+                      <th className="px-2 py-1.5 text-center">Est. Lost</th>
+                    </tr></thead>
+                    <tbody>{yrNS.map((n, i) => (
+                      <tr key={i} className={n.noShowRate > 15 ? 'bg-red-50' : i % 2 ? '' : 'bg-orange-50/40'}>
+                        <td className="px-2 py-1 font-medium">{n.location}</td>
+                        <td className="px-2 py-1 text-center">{fmtN(n.totalScheduled)}</td>
+                        <td className="px-2 py-1 text-center">{fmtN(n.totalArrived)}</td>
+                        <td className={`px-2 py-1 text-center font-medium ${n.noShowRate > 15 ? 'text-red-600' : n.noShowRate > 10 ? 'text-orange-600' : 'text-green-600'}`}>{n.noShowRate}%</td>
+                        <td className="px-2 py-1 text-center text-red-600">{fmt(n.estLostRev)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )
+          })}
+        </>}
+
         {/* OT vs PT */}
         {tab === 'otpt' && <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -726,6 +964,73 @@ export default function Dashboard() {
             )
           })}
         </>}
+
+        {/* MULTI-LOCATION COMPARISON */}
+        {tab === 'compare' && (() => {
+          const locs = [...new Set(locationKPIs.map(l => l.location))].sort()
+          const selected = compareLocs.length > 0 ? compareLocs : locs.slice(0, 3)
+          const latestYr = years[years.length - 1]
+          const selectedKPIs = locationKPIs.filter(l => selected.includes(l.location) && l.year === latestYr)
+          const COMPARE_COLORS = [O, BL, G, PU, R, '#F59E0B']
+          return <>
+            <div className="flex gap-2 items-center flex-wrap">
+              <span className="text-xs font-medium text-gray-600">Select locations:</span>
+              {locs.map(loc => (
+                <button key={loc}
+                  onClick={() => setCompareLocs(prev => prev.includes(loc) ? prev.filter(l => l !== loc) : [...prev, loc].slice(-6))}
+                  className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
+                    selected.includes(loc) ? 'border-orange-400 bg-orange-50 text-orange-700 font-medium' : 'border-gray-300 text-gray-500 hover:border-gray-400'
+                  }`}>
+                  {loc}
+                </button>
+              ))}
+            </div>
+            <div className="bg-white rounded-lg p-4 shadow-sm">
+              <h3 className="text-sm font-bold mb-2" style={{ color: O }}>{latestYr} Side-by-Side Comparison</h3>
+              <table className="w-full text-xs">
+                <thead><tr style={{ backgroundColor: O }} className="text-white">
+                  <th className="px-2 py-1.5 text-left">KPI</th>
+                  {selected.map((loc, i) => <th key={loc} className="px-2 py-1.5 text-center" style={{ color: COMPARE_COLORS[i] ? '#fff' : '#fff' }}>{loc}</th>)}
+                </tr></thead>
+                <tbody>
+                  {[
+                    { l: 'Total Cases', f: (k: any) => fmtN(k.totalCases) },
+                    { l: 'Physician Cases', f: (k: any) => fmtN(k.physCases) },
+                    { l: 'Total Visits', f: (k: any) => fmtN(k.totalVisits) },
+                    { l: 'Weighted Revenue', f: (k: any) => fmt(k.weightedRev) },
+                    { l: 'Avg RPV', f: (k: any) => `$${k.avgRPV}` },
+                    { l: 'V/E', f: (k: any) => k.avgVE },
+                    { l: 'Arrive %', f: (k: any) => `${k.arriveRate}%` },
+                    { l: 'OT %', f: (k: any) => `${k.otPct}%` },
+                    { l: 'Physicians', f: (k: any) => k.uniquePhysicians },
+                  ].map((row, ri) => (
+                    <tr key={ri} className={ri % 2 ? '' : 'bg-orange-50/40'}>
+                      <td className="px-2 py-1 font-medium">{row.l}</td>
+                      {selected.map(loc => {
+                        const k = selectedKPIs.find(k => k.location === loc)
+                        return <td key={loc} className="px-2 py-1 text-center">{k ? row.f(k) : '—'}</td>
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="bg-white rounded-lg p-4 shadow-sm">
+              <h3 className="text-sm font-bold mb-2" style={{ color: O }}>Revenue Comparison</h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={selectedKPIs}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="location" tick={{ fontSize: 10 }} />
+                  <YAxis tickFormatter={(v: number) => fmt(v)} tick={{ fontSize: 9 }} />
+                  <Tooltip formatter={(v: any) => fmt(v)} />
+                  <Bar dataKey="weightedRev" name="Revenue" radius={[4, 4, 0, 0]}>
+                    {selectedKPIs.map((_, i) => <Cell key={i} fill={COMPARE_COLORS[i % COMPARE_COLORS.length]} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </>
+        })()}
 
         {/* LOCATIONS */}
         {tab === 'locations' && <>
