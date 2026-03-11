@@ -202,6 +202,8 @@ const PAYER_TIERS: Record<string, string> = {
 };
 
 const DEFAULT_RPV = 95;
+/** Average visits-per-eval across all historical data, used as fallback when a physician has no prior-year data */
+const DEFAULT_VISITS_PER_EVAL = 11.2;
 const UHC_KEYWORDS = ['UNITED', 'UHC', 'OPTUM'];
 
 // ============================================================
@@ -515,7 +517,7 @@ function computeAlerts(physCases: RawCase[], priorYear: number, latestYear: numb
     const ePrior = pGrp.length;
     const eLatest = lGrp.length;
     const name = mode([...pGrp, ...lGrp].map(c => c.referringDoctor));
-    const ve = npiVE[npi] || 11.2;
+    const ve = npiVE[npi] || DEFAULT_VISITS_PER_EVAL;
 
     let category = '';
     let pctChange: number | null = null;
@@ -590,7 +592,7 @@ function computeZeroVisitAlerts(cases: RawCase[]): ZeroVisitAlert[] {
         evals: grp.length,
         uniquePatients,
         issue: hasScheduled ? 'Scheduling/No-Show' : 'Never Scheduled',
-        estLostRev: Math.round(grp.length * 11.2 * DEFAULT_RPV),
+        estLostRev: Math.round(grp.length * DEFAULT_VISITS_PER_EVAL * DEFAULT_RPV),
       });
     }
   }

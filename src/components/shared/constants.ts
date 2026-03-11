@@ -11,6 +11,7 @@ export const fmt = (n: number) =>
 export const fmtN = (n: number) => (n >= 1e3 ? n.toLocaleString() : String(n))
 
 export const TABS = [
+  { id: 'summary', label: 'Summary' },
   { id: 'kpi', label: 'KPI Trends' },
   { id: 'revenue', label: 'Revenue' },
   { id: 'physicians', label: 'Physicians' },

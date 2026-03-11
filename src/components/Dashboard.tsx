@@ -1,18 +1,22 @@
 'use client'
 
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import {
   parseExcelFile, processData,
-  type DataSet, type ProcessedData, type RawCase,
+  type DataSet, type ProcessedData,
 } from '@/lib/dataEngine'
 import {
   saveDataset, saveCases, saveProcessedKPIs,
-  loadDatasets, loadCases, loadProcessedKPIs, deleteDataset,
+  loadDatasets, loadCases, loadProcessedKPIs, deleteDataset, dbCaseToRawCase,
 } from '@/lib/supabase'
 import UploadScreen from './shared/UploadScreen'
 import Header from './shared/Header'
 import TabNav from './shared/TabNav'
 import ErrorToast from './shared/ErrorToast'
+import { TabSkeleton } from './shared/Skeleton'
+import { TABS } from './shared/constants'
+import SummaryTab from './tabs/SummaryTab'
 import KPITab from './tabs/KPITab'
 import RevenueTab from './tabs/RevenueTab'
 import PhysiciansTab from './tabs/PhysiciansTab'
@@ -21,19 +25,56 @@ import FunnelTab from './tabs/FunnelTab'
 import OTPTTab from './tabs/OTPTTab'
 import LocationsTab from './tabs/LocationsTab'
 
+const AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
+const VALID_TAB_IDS = new Set(TABS.map((t) => t.id))
+
 export default function Dashboard() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const initialTab = searchParams.get('tab') || 'summary'
+
   const [datasets, setDatasets] = useState<DataSet[]>([])
   const [data, setData] = useState<ProcessedData | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
-  const [tab, setTab] = useState('kpi')
+  const [tab, setTab] = useState(VALID_TAB_IDS.has(initialTab) ? initialTab : 'summary')
   const [status, setStatus] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [lastSaved, setLastSaved] = useState<Date | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const dataRef = useRef<ProcessedData | null>(null)
+  const dirtyRef = useRef(false)
+
+  // Keep dataRef in sync
+  useEffect(() => { dataRef.current = data }, [data])
 
   const showError = useCallback((msg: string) => {
     console.error(msg)
     setError(msg)
+  }, [])
+
+  // URL-based tab routing
+  const handleTabChange = useCallback((id: string) => {
+    setTab(id)
+    const params = new URLSearchParams(searchParams.toString())
+    params.set('tab', id)
+    router.replace(`?${params.toString()}`, { scroll: false })
+  }, [searchParams, router])
+
+  // Autosave: periodically save processed KPIs to Supabase
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (dirtyRef.current && dataRef.current) {
+        try {
+          await saveProcessedKPIs(dataRef.current)
+          dirtyRef.current = false
+          setLastSaved(new Date())
+        } catch {
+          // Silent — autosave is best-effort
+        }
+      }
+    }, AUTOSAVE_INTERVAL_MS)
+    return () => clearInterval(interval)
   }, [])
 
   // Load from Supabase on mount
@@ -46,7 +87,7 @@ export default function Dashboard() {
         const dbDatasets = await loadDatasets()
 
         if (cached && dbDatasets.length > 0) {
-          const ds: DataSet[] = dbDatasets.map((d: any) => ({
+          const ds: DataSet[] = dbDatasets.map((d) => ({
             label: d.label,
             year: d.year,
             startDate: d.start_date || '',
@@ -54,14 +95,14 @@ export default function Dashboard() {
             cases: [],
           }))
           setDatasets(ds)
-          setData(cached as ProcessedData)
+          setData(cached)
           setStatus('')
         } else if (dbDatasets.length > 0) {
           setStatus('Recomputing from saved data...')
           const allCases = await loadCases()
-          const ds: DataSet[] = dbDatasets.map((d: any) => {
+          const ds: DataSet[] = dbDatasets.map((d) => {
             const dCases = allCases
-              .filter((c: any) => c.dataset_id === d.id)
+              .filter((c) => c.dataset_id === d.id)
               .map(dbCaseToRawCase)
             return {
               label: d.label, year: d.year,
@@ -73,6 +114,7 @@ export default function Dashboard() {
           const processed = processData(ds)
           setData(processed)
           await saveProcessedKPIs(processed)
+          setLastSaved(new Date())
           setStatus('')
         } else {
           setStatus('')
@@ -129,9 +171,12 @@ export default function Dashboard() {
     setStatus('Computing analytics...')
     const processed = processData(newDs)
     setData(processed)
+    dirtyRef.current = true
 
     try {
       await saveProcessedKPIs(processed)
+      dirtyRef.current = false
+      setLastSaved(new Date())
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error'
       showError(`Failed to cache analytics: ${msg}`)
@@ -154,7 +199,12 @@ export default function Dashboard() {
     if (updated.length > 0) {
       const processed = processData(updated)
       setData(processed)
-      try { await saveProcessedKPIs(processed) } catch { /* best-effort */ }
+      dirtyRef.current = true
+      try {
+        await saveProcessedKPIs(processed)
+        dirtyRef.current = false
+        setLastSaved(new Date())
+      } catch { /* best-effort */ }
     } else {
       setData(null)
     }
@@ -194,45 +244,44 @@ export default function Dashboard() {
         onRemoveDs={removeDs}
         onFiles={handleFiles}
       />
-      <TabNav tab={tab} onTabChange={(id) => { setTab(id) }} />
+      <TabNav tab={tab} onTabChange={handleTabChange} />
 
       <div className="max-w-7xl mx-auto p-4 space-y-4">
-        {tab === 'kpi' && <KPITab annualKPIs={annualKPIs} monthlyKPIs={monthlyKPIs} years={years} />}
-        {tab === 'revenue' && <RevenueTab annualKPIs={annualKPIs} monthlyKPIs={monthlyKPIs} />}
-        {tab === 'physicians' && <PhysiciansTab physicianRankings={physicianRankings} years={years} allLocations={allLocations} />}
-        {tab === 'alerts' && <AlertsTab alerts={alerts} zeroVisitAlerts={zeroVisitAlerts} years={years} allLocations={allLocations} />}
-        {tab === 'funnel' && <FunnelTab funnel={funnel} years={years} />}
-        {tab === 'otpt' && <OTPTTab annualKPIs={annualKPIs} monthlyKPIs={monthlyKPIs} otPTSplit={otPTSplit} years={years} />}
-        {tab === 'locations' && <LocationsTab locationKPIs={locationKPIs} years={years} />}
+        {/* Autosave indicator */}
+        {lastSaved && (
+          <div className="text-right">
+            <span className="text-[10px] text-gray-400">
+              Last saved: {lastSaved.toLocaleTimeString()}
+            </span>
+          </div>
+        )}
+
+        {loading ? (
+          <TabSkeleton />
+        ) : (
+          <>
+            {tab === 'summary' && (
+              <SummaryTab
+                annualKPIs={annualKPIs}
+                alerts={alerts}
+                zeroVisitAlerts={zeroVisitAlerts}
+                locationKPIs={locationKPIs}
+                physicianRankings={physicianRankings}
+                years={years}
+              />
+            )}
+            {tab === 'kpi' && <KPITab annualKPIs={annualKPIs} monthlyKPIs={monthlyKPIs} years={years} />}
+            {tab === 'revenue' && <RevenueTab annualKPIs={annualKPIs} monthlyKPIs={monthlyKPIs} />}
+            {tab === 'physicians' && <PhysiciansTab physicianRankings={physicianRankings} years={years} allLocations={allLocations} />}
+            {tab === 'alerts' && <AlertsTab alerts={alerts} zeroVisitAlerts={zeroVisitAlerts} years={years} allLocations={allLocations} />}
+            {tab === 'funnel' && <FunnelTab funnel={funnel} years={years} />}
+            {tab === 'otpt' && <OTPTTab annualKPIs={annualKPIs} monthlyKPIs={monthlyKPIs} otPTSplit={otPTSplit} years={years} />}
+            {tab === 'locations' && <LocationsTab locationKPIs={locationKPIs} years={years} />}
+          </>
+        )}
       </div>
 
       {error && <ErrorToast message={error} onDismiss={() => setError(null)} />}
     </div>
   )
-}
-
-function dbCaseToRawCase(c: any): RawCase {
-  return {
-    patientAccountNumber: c.patient_account_number || '',
-    patientName: c.patient_name || '',
-    caseTherapist: c.case_therapist || '',
-    caseFacility: c.case_facility || '',
-    referringDoctor: c.referring_doctor || '',
-    referringDoctorNPI: c.referring_doctor_npi || '',
-    referralSource: c.referral_source || '',
-    primaryPayerType: c.primary_payer_type || '',
-    primaryInsurance: c.primary_insurance || '',
-    arrivedVisits: c.arrived_visits || 0,
-    scheduledVisits: c.scheduled_visits || 0,
-    createdDate: c.created_date ? new Date(c.created_date) : null,
-    dateOfInitialEval: c.date_of_initial_eval ? new Date(c.date_of_initial_eval) : null,
-    dischargeDate: c.discharge_date ? new Date(c.discharge_date) : null,
-    dateOfFirstScheduledVisit: c.date_of_first_scheduled_visit ? new Date(c.date_of_first_scheduled_visit) : null,
-    dateOfFirstArrivedVisit: c.date_of_first_arrived_visit ? new Date(c.date_of_first_arrived_visit) : null,
-    discipline: c.discipline || '',
-    dischargeReason: c.discharge_reason || '',
-    year: c.year || 0,
-    isPhysician: c.is_physician || false,
-    isUHC: c.is_uhc || false,
-  }
 }

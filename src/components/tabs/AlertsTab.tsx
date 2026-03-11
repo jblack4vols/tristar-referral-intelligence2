@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Stat from '../shared/Stat'
 import AlertBadge from '../shared/AlertBadge'
+import ExportButton from '../shared/ExportButton'
 import { R, G, BL } from '../shared/constants'
 import type { Alert, ZeroVisitAlert } from '@/lib/dataEngine'
 
@@ -27,6 +28,34 @@ export default function AlertsTab({
     return <div className="bg-white rounded-lg p-8 text-center text-gray-400 shadow-sm">Need 2+ years for alerts.</div>
   }
 
+  const filtered = alerts.filter((a) => {
+    if (search && !a.physician.toLowerCase().includes(search.toLowerCase())) return false
+    if (locFilter !== 'All' && a.location !== locFilter) return false
+    return true
+  })
+
+  const exportRows = filtered.map((a) => ({
+    category: a.category,
+    physician: a.physician,
+    npi: a.npi,
+    location: a.location,
+    evalsPrior: a.evalsOld,
+    evalsCurrent: a.evalsNew,
+    pctChange: a.pctChange !== null ? `${a.pctChange}%` : 'New',
+    estRevImpact: a.estRevImpact,
+  }))
+
+  const exportHeaders = [
+    { key: 'category', label: 'Category' },
+    { key: 'physician', label: 'Physician' },
+    { key: 'npi', label: 'NPI' },
+    { key: 'location', label: 'Location' },
+    { key: 'evalsPrior', label: `${py} Evals` },
+    { key: 'evalsCurrent', label: `${ly} Evals` },
+    { key: 'pctChange', label: 'Change %' },
+    { key: 'estRevImpact', label: 'Est. Revenue Impact' },
+  ]
+
   return (
     <>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -48,6 +77,9 @@ export default function AlertsTab({
         <select value={locFilter} onChange={(e) => setLocFilter(e.target.value)} className="text-xs border rounded px-2 py-1.5 bg-white">
           {allLocations.map((l) => <option key={l}>{l}</option>)}
         </select>
+        <div className="ml-auto">
+          <ExportButton rows={exportRows} headers={exportHeaders} fileName="physician-alerts" />
+        </div>
       </div>
       <div className="bg-white rounded-lg shadow-sm overflow-x-auto">
         <table className="w-full text-xs">
@@ -55,7 +87,7 @@ export default function AlertsTab({
             <tr className="bg-gray-50 border-b">
               <th className="px-2 py-2 text-left">Category</th>
               <th className="px-2 py-2 text-left">Physician</th>
-              <th className="px-2 py-2 text-left">Location</th>
+              <th className="px-2 py-2 text-left hidden sm:table-cell">Location</th>
               <th className="px-2 py-2 text-center">{py}</th>
               <th className="px-2 py-2 text-center">{ly}</th>
               <th className="px-2 py-2 text-center">&Delta;%</th>
@@ -63,27 +95,21 @@ export default function AlertsTab({
             </tr>
           </thead>
           <tbody>
-            {alerts
-              .filter((a) => {
-                if (search && !a.physician.toLowerCase().includes(search.toLowerCase())) return false
-                if (locFilter !== 'All' && a.location !== locFilter) return false
-                return true
-              })
-              .map((a, i) => (
-                <tr key={i} className="border-b border-gray-50">
-                  <td className="px-2 py-1.5"><AlertBadge category={a.category} /></td>
-                  <td className="px-2 py-1.5 font-medium">{a.physician}</td>
-                  <td className="px-2 py-1.5 text-gray-500">{a.location}</td>
-                  <td className="px-2 py-1.5 text-center">{a.evalsOld}</td>
-                  <td className="px-2 py-1.5 text-center font-bold">{a.evalsNew}</td>
-                  <td className={`px-2 py-1.5 text-center font-medium ${(a.pctChange || 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {a.pctChange !== null ? `${a.pctChange > 0 ? '+' : ''}${a.pctChange}%` : 'New'}
-                  </td>
-                  <td className={`px-2 py-1.5 text-center font-medium ${a.estRevImpact < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {a.estRevImpact < 0 ? `-$${Math.abs(a.estRevImpact).toLocaleString()}` : `+$${a.estRevImpact.toLocaleString()}`}
-                  </td>
-                </tr>
-              ))}
+            {filtered.map((a, i) => (
+              <tr key={i} className="border-b border-gray-50">
+                <td className="px-2 py-1.5"><AlertBadge category={a.category} /></td>
+                <td className="px-2 py-1.5 font-medium">{a.physician}</td>
+                <td className="px-2 py-1.5 text-gray-500 hidden sm:table-cell">{a.location}</td>
+                <td className="px-2 py-1.5 text-center">{a.evalsOld}</td>
+                <td className="px-2 py-1.5 text-center font-bold">{a.evalsNew}</td>
+                <td className={`px-2 py-1.5 text-center font-medium ${(a.pctChange || 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  {a.pctChange !== null ? `${a.pctChange > 0 ? '+' : ''}${a.pctChange}%` : 'New'}
+                </td>
+                <td className={`px-2 py-1.5 text-center font-medium ${a.estRevImpact < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  {a.estRevImpact < 0 ? `-$${Math.abs(a.estRevImpact).toLocaleString()}` : `+$${a.estRevImpact.toLocaleString()}`}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -94,7 +120,7 @@ export default function AlertsTab({
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-1.5 text-left">Physician</th>
-                <th className="px-2 py-1.5">Location</th>
+                <th className="px-2 py-1.5 hidden sm:table-cell">Location</th>
                 <th className="px-2 py-1.5 text-center">Evals</th>
                 <th className="px-2 py-1.5">Issue</th>
                 <th className="px-2 py-1.5 text-center">Est. Lost</th>
@@ -104,7 +130,7 @@ export default function AlertsTab({
               {zeroVisitAlerts.map((z, i) => (
                 <tr key={i} className="bg-red-50/50 border-b border-red-100">
                   <td className="px-2 py-1 font-medium">{z.physician}</td>
-                  <td className="px-2 py-1 text-center">{z.location}</td>
+                  <td className="px-2 py-1 text-center hidden sm:table-cell">{z.location}</td>
                   <td className="px-2 py-1 text-center font-bold">{z.evals}</td>
                   <td className="px-2 py-1">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${z.issue === 'Never Scheduled' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
