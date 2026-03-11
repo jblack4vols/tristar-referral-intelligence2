@@ -46,6 +46,7 @@ export interface ProcessedData {
   zeroVisitAlerts: ZeroVisitAlert[];
   otPTSplit: OTPTRow[];
   payerMix: PayerMixRow[];
+  lagAnalysis: LagAnalysisRow[];
 }
 
 export interface AnnualKPI {
@@ -165,6 +166,15 @@ export interface PayerMixRow {
   payerType: string;
   count: number;
   pct: number;
+}
+
+export interface LagAnalysisRow {
+  year: number;
+  location: string;
+  avgCreatedToSchedDays: number;
+  avgCreatedToEvalDays: number;
+  avgSchedToArriveDays: number;
+  caseCount: number;
 }
 
 // ============================================================
@@ -319,6 +329,9 @@ export function processData(datasets: DataSet[]): ProcessedData {
   // Payer mix
   const payerMix = computePayerMix(physCases, years);
 
+  // Lag analysis
+  const lagAnalysis = computeLagAnalysis(physCases, years);
+
   return {
     datasets,
     annualKPIs,
@@ -330,6 +343,7 @@ export function processData(datasets: DataSet[]): ProcessedData {
     zeroVisitAlerts,
     otPTSplit,
     payerMix,
+    lagAnalysis,
   };
 }
 
@@ -634,6 +648,51 @@ function computePayerMix(physCases: RawCase[], years: number[]): PayerMixRow[] {
     }
   }
   return results.sort((a, b) => b.count - a.count);
+}
+
+function computeLagAnalysis(physCases: RawCase[], years: number[]): LagAnalysisRow[] {
+  const results: LagAnalysisRow[] = [];
+  for (const yr of years) {
+    const byLoc = groupBy(physCases.filter(c => c.year === yr), c => c.caseFacility);
+    for (const [loc, grp] of Object.entries(byLoc)) {
+      const createdToSched: number[] = [];
+      const createdToEval: number[] = [];
+      const schedToArrive: number[] = [];
+
+      for (const c of grp) {
+        if (c.createdDate && c.dateOfFirstScheduledVisit) {
+          const days = diffDays(c.createdDate, c.dateOfFirstScheduledVisit);
+          if (days >= 0 && days < 365) createdToSched.push(days);
+        }
+        if (c.createdDate && c.dateOfInitialEval) {
+          const days = diffDays(c.createdDate, c.dateOfInitialEval);
+          if (days >= 0 && days < 365) createdToEval.push(days);
+        }
+        if (c.dateOfFirstScheduledVisit && c.dateOfFirstArrivedVisit) {
+          const days = diffDays(c.dateOfFirstScheduledVisit, c.dateOfFirstArrivedVisit);
+          if (days >= 0 && days < 365) schedToArrive.push(days);
+        }
+      }
+
+      results.push({
+        year: yr,
+        location: loc.replace('Tristar PT - ', ''),
+        avgCreatedToSchedDays: rd(avg(createdToSched)),
+        avgCreatedToEvalDays: rd(avg(createdToEval)),
+        avgSchedToArriveDays: rd(avg(schedToArrive)),
+        caseCount: grp.length,
+      });
+    }
+  }
+  return results;
+}
+
+function diffDays(a: Date, b: Date): number {
+  return Math.round((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function avg(arr: number[]): number {
+  return arr.length > 0 ? arr.reduce((s, n) => s + n, 0) / arr.length : 0;
 }
 
 // ============================================================
