@@ -2,9 +2,11 @@
 
 import { useState, useCallback, useMemo, useRef } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
+import { useAuth } from '@/hooks/use-auth'
 import { useDataLoader } from '@/hooks/use-data-loader'
 import { useFileUpload } from '@/hooks/use-file-upload'
 import { useAutosave } from '@/hooks/use-autosave'
+import LoginScreen from './shared/LoginScreen'
 import UploadScreen from './shared/UploadScreen'
 import Header from './shared/Header'
 import TabNav from './shared/TabNav'
@@ -25,6 +27,7 @@ import LocationsTab from './tabs/LocationsTab'
 const VALID_TAB_IDS = new Set(TABS.map((t) => t.id))
 
 export default function Dashboard() {
+  const { user, loading: authLoading, signIn, signOut } = useAuth()
   const searchParams = useSearchParams()
   const router = useRouter()
   const initialTab = searchParams.get('tab') || 'summary'
@@ -60,6 +63,19 @@ export default function Dashboard() {
 
   const years = useMemo(() => data?.annualKPIs.map(a => a.year) || [], [data])
 
+  // Auth gate: show login if not authenticated
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <LoginScreen onSignIn={signIn} />
+  }
+
   if (!data) {
     return (
       <>
@@ -83,8 +99,10 @@ export default function Dashboard() {
         datasets={datasets}
         status={status}
         fileRef={fileRef}
+        userEmail={user.email || ''}
         onRemoveDs={removeDs}
         onFiles={handleFiles}
+        onSignOut={signOut}
       />
       <TabNav tab={tab} onTabChange={handleTabChange} />
 

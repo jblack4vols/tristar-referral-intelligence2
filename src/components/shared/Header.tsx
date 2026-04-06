@@ -8,14 +8,18 @@ export default function Header({
   datasets,
   status,
   fileRef,
+  userEmail,
   onRemoveDs,
   onFiles,
+  onSignOut,
 }: {
   datasets: DataSet[]
   status: string
   fileRef: RefObject<HTMLInputElement>
+  userEmail: string
   onRemoveDs: (year: number) => void
   onFiles: (files: FileList) => void
+  onSignOut: () => void
 }) {
   return (
     <div className="text-white px-4 py-3" style={{ backgroundColor: BK }}>
@@ -56,6 +60,13 @@ export default function Header({
               e.target.value = ''
             }}
           />
+          <span className="text-[10px] text-gray-500 hidden md:inline">{userEmail}</span>
+          <button
+            onClick={onSignOut}
+            className="text-[10px] text-gray-500 hover:text-white transition-colors"
+          >
+            Sign Out
+          </button>
         </div>
       </div>
       {status && (
