@@ -6,9 +6,9 @@
 1. Go to https://vercel.com/new
 2. Click "Upload" and drag the project folder
 3. Framework: Next.js
-4. Add Environment Variables:
-   - NEXT_PUBLIC_SUPABASE_URL = https://tkgygnninsbzzwlobtff.supabase.co
-   - NEXT_PUBLIC_SUPABASE_ANON_KEY = (see .env.example)
+4. Add Environment Variables (see .env.example):
+   - NEXT_PUBLIC_SUPABASE_URL
+   - NEXT_PUBLIC_SUPABASE_ANON_KEY
 5. Click Deploy
 
 ### Option 2: Git
@@ -20,8 +20,8 @@
 ## Supabase
 - Project: Referral Intelligence
 - Region: us-east-1
-- URL: https://tkgygnninsbzzwlobtff.supabase.co
 - Database has tables: datasets, cases, processed_kpis
+- URL and keys: see .env.example
 
 ## How to Use
 1. Open the deployed URL

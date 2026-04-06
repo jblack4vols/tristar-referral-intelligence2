@@ -34,7 +34,7 @@ export default function Header({
               style={{ backgroundColor: '#333', color: O }}
             >
               {d.year}
-              <button onClick={() => onRemoveDs(d.year)} className="ml-0.5 hover:text-white text-gray-500">
+              <button onClick={() => { if (window.confirm(`Remove ${d.year} data? This deletes it from the database.`)) onRemoveDs(d.year) }} className="ml-0.5 hover:text-white text-gray-500">
                 &times;
               </button>
             </span>

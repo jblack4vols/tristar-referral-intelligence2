@@ -23,8 +23,14 @@ export function useFileUpload({
     setUploading(true)
     const newDs = [...datasets]
 
+    const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB
+
     for (const file of Array.from(files)) {
       if (!file.name.match(/\.xlsx?$/i)) continue
+      if (file.size > MAX_FILE_SIZE) {
+        showError(`${file.name} exceeds 50MB limit. Skipping.`)
+        continue
+      }
       setStatus(`Parsing ${file.name}...`)
 
       let ds: DataSet

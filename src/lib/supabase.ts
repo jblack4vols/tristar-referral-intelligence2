@@ -128,10 +128,12 @@ export async function saveCases(datasetId: string, cases: RawCase[]) {
 }
 
 export async function saveProcessedKPIs(data: ProcessedData) {
-  // Delete old, keep latest
-  await supabase.from('processed_kpis').delete().neq('id', '00000000-0000-0000-0000-000000000000')
-  const { error } = await supabase.from('processed_kpis').insert({ data })
+  // Insert new row first, then delete old rows (avoids brief window with no cached data)
+  const { data: newRow, error } = await supabase.from('processed_kpis').insert({ data }).select('id').single()
   if (error) throw error
+  if (newRow) {
+    await supabase.from('processed_kpis').delete().neq('id', newRow.id)
+  }
 }
 
 export async function loadDatasets(): Promise<DatasetRow[]> {
