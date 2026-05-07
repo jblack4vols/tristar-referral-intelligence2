@@ -5,6 +5,7 @@ import {
   LineChart, Line, Legend, CartesianGrid,
 } from 'recharts'
 import Stat from '../shared/Stat'
+import ExportButton from '../shared/ExportButton'
 import { O, G, R, BK, fmt, fmtN } from '../shared/constants'
 import type { AnnualKPI, MonthlyKPI } from '@/lib/dataEngine'
 
@@ -69,7 +70,25 @@ export default function KPITab({
       </div>
       {/* Annual table */}
       <div className="bg-white rounded-lg p-4 shadow-sm overflow-x-auto">
-        <h3 className="text-sm font-bold mb-2" style={{ color: O }}>Annual Comparison</h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-bold" style={{ color: O }}>Annual Comparison</h3>
+          <ExportButton
+            rows={annualKPIs.map((a) => ({
+              year: a.year, totalCases: a.totalCases, physicianCases: a.physicianCases,
+              nonPhysicianCases: a.nonPhysicianCases, weightedRevenue: a.weightedRevenue,
+              avgWeightedRPV: a.avgWeightedRPV, tierAPct: a.tierAPct, otPct: a.otPct,
+              avgVE: a.avgVE, uniquePhysicians: a.uniquePhysicians,
+            }))}
+            headers={[
+              { key: 'year', label: 'Year' }, { key: 'totalCases', label: 'Total Cases' },
+              { key: 'physicianCases', label: 'Physician Cases' }, { key: 'nonPhysicianCases', label: 'Non-Physician' },
+              { key: 'weightedRevenue', label: 'Weighted Revenue' }, { key: 'avgWeightedRPV', label: 'Avg RPV' },
+              { key: 'tierAPct', label: 'Tier A %' }, { key: 'otPct', label: 'OT %' },
+              { key: 'avgVE', label: 'Avg V/E' }, { key: 'uniquePhysicians', label: 'Physicians' },
+            ]}
+            fileName="annual-kpis"
+          />
+        </div>
         <table className="w-full text-xs">
           <thead>
             <tr style={{ backgroundColor: O }} className="text-white">

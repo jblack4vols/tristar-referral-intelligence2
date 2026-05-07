@@ -4,6 +4,7 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
 import Stat from '../shared/Stat'
+import ExportButton from '../shared/ExportButton'
 import { O, G, BL, fmtN } from '../shared/constants'
 import type { AnnualKPI, MonthlyKPI, OTPTRow } from '@/lib/dataEngine'
 
@@ -21,12 +22,26 @@ export default function OTPTTab({
   const py = years.length > 1 ? years[years.length - 2] : null
   const mf = monthlyKPIs.filter((m) => m.totalCases >= 50)
 
+  const exportRows = otPTSplit.map((o) => ({
+    year: o.year, location: o.location,
+    ptCases: o.ptCases, otCases: o.otCases, otPct: o.otPct,
+  }))
+
+  const exportHeaders = [
+    { key: 'year', label: 'Year' }, { key: 'location', label: 'Location' },
+    { key: 'ptCases', label: 'PT Cases' }, { key: 'otCases', label: 'OT Cases' },
+    { key: 'otPct', label: 'OT %' },
+  ]
+
   return (
     <>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="flex items-center justify-between">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 flex-1">
         {annualKPIs.map((a) => (
           <Stat key={a.year} label={`${a.year} OT`} value={fmtN(a.otCases)} sub={`${a.otPct}%`} color={a.otPct > 15 ? G : O} />
         ))}
+        </div>
+        <ExportButton rows={exportRows} headers={exportHeaders} fileName="ot-pt-split" />
       </div>
       <div className="bg-white rounded-lg p-4 shadow-sm">
         <h3 className="text-sm font-bold mb-2" style={{ color: O }}>Monthly OT %</h3>

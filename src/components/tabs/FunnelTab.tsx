@@ -1,5 +1,6 @@
 'use client'
 
+import ExportButton from '../shared/ExportButton'
 import { O } from '../shared/constants'
 import type { FunnelRow } from '@/lib/dataEngine'
 
@@ -10,8 +11,24 @@ export default function FunnelTab({
   funnel: FunnelRow[]
   years: number[]
 }) {
+  const exportRows = funnel.map((f) => ({
+    year: f.year, location: f.location, created: f.created,
+    schedRate: f.schedRate, arriveRate: f.arriveRate,
+    evalRate: f.evalRate, dcRate: f.dcRate,
+  }))
+
+  const exportHeaders = [
+    { key: 'year', label: 'Year' }, { key: 'location', label: 'Location' },
+    { key: 'created', label: 'Created' }, { key: 'schedRate', label: 'Sched %' },
+    { key: 'arriveRate', label: 'Arrive %' }, { key: 'evalRate', label: 'Eval %' },
+    { key: 'dcRate', label: 'DC %' },
+  ]
+
   return (
     <>
+      <div className="flex justify-end">
+        <ExportButton rows={exportRows} headers={exportHeaders} fileName="conversion-funnel" />
+      </div>
       {years.map((yr) => (
         <div key={yr} className="bg-white rounded-lg shadow-sm p-4">
           <h3 className="text-sm font-bold mb-2" style={{ color: O }}>{yr} Conversion Funnel</h3>
