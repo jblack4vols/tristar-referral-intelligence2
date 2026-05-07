@@ -18,5 +18,7 @@ export const TABS = [
   { id: 'alerts', label: 'Alerts' },
   { id: 'funnel', label: 'Funnel' },
   { id: 'otpt', label: 'OT vs PT' },
+  { id: 'payer', label: 'Payer Mix' },
+  { id: 'lag', label: 'Speed to Care' },
   { id: 'locations', label: 'Locations' },
 ]

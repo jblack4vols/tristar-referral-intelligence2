@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import type { RawCase, ProcessedData } from './dataEngine'
+import { batchHashPHI } from './phi-hash'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -95,12 +96,16 @@ export async function saveDataset(dataset: {
 }
 
 export async function saveCases(datasetId: string, cases: RawCase[]) {
+  // Hash PHI fields before storing — preserves uniqueness for dedup, removes identifiable data
+  const nameMap = await batchHashPHI(cases.map(c => c.patientName))
+  const acctMap = await batchHashPHI(cases.map(c => c.patientAccountNumber))
+
   const BATCH = 500
   for (let i = 0; i < cases.length; i += BATCH) {
     const batch: Omit<CaseRow, 'id'>[] = cases.slice(i, i + BATCH).map(c => ({
       dataset_id: datasetId,
-      patient_account_number: c.patientAccountNumber,
-      patient_name: c.patientName,
+      patient_account_number: acctMap.get(c.patientAccountNumber) || '',
+      patient_name: nameMap.get(c.patientName) || '',
       case_therapist: c.caseTherapist,
       case_facility: c.caseFacility,
       referring_doctor: c.referringDoctor,
@@ -128,10 +133,12 @@ export async function saveCases(datasetId: string, cases: RawCase[]) {
 }
 
 export async function saveProcessedKPIs(data: ProcessedData) {
-  // Delete old, keep latest
-  await supabase.from('processed_kpis').delete().neq('id', '00000000-0000-0000-0000-000000000000')
-  const { error } = await supabase.from('processed_kpis').insert({ data })
+  // Insert new row first, then delete old rows (avoids brief window with no cached data)
+  const { data: newRow, error } = await supabase.from('processed_kpis').insert({ data }).select('id').single()
   if (error) throw error
+  if (newRow) {
+    await supabase.from('processed_kpis').delete().neq('id', newRow.id)
+  }
 }
 
 export async function loadDatasets(): Promise<DatasetRow[]> {

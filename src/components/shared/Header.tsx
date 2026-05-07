@@ -8,14 +8,18 @@ export default function Header({
   datasets,
   status,
   fileRef,
+  userEmail,
   onRemoveDs,
   onFiles,
+  onSignOut,
 }: {
   datasets: DataSet[]
   status: string
   fileRef: RefObject<HTMLInputElement>
+  userEmail: string
   onRemoveDs: (year: number) => void
   onFiles: (files: FileList) => void
+  onSignOut: () => void
 }) {
   return (
     <div className="text-white px-4 py-3" style={{ backgroundColor: BK }}>
@@ -34,7 +38,7 @@ export default function Header({
               style={{ backgroundColor: '#333', color: O }}
             >
               {d.year}
-              <button onClick={() => onRemoveDs(d.year)} className="ml-0.5 hover:text-white text-gray-500">
+              <button onClick={() => { if (window.confirm(`Remove ${d.year} data? This deletes it from the database.`)) onRemoveDs(d.year) }} className="ml-0.5 hover:text-white text-gray-500">
                 &times;
               </button>
             </span>
@@ -56,6 +60,13 @@ export default function Header({
               e.target.value = ''
             }}
           />
+          <span className="text-[10px] text-gray-500 hidden md:inline">{userEmail}</span>
+          <button
+            onClick={onSignOut}
+            className="text-[10px] text-gray-500 hover:text-white transition-colors"
+          >
+            Sign Out
+          </button>
         </div>
       </div>
       {status && (
