@@ -4,6 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
 import Stat from '../shared/Stat'
+import ExportButton from '../shared/ExportButton'
 import { O, G, R, BL, fmt } from '../shared/constants'
 import type { AnnualKPI, LagAnalysisRow } from '@/lib/dataEngine'
 
@@ -16,8 +17,27 @@ export default function SpeedToCareTab({
   lagAnalysis: LagAnalysisRow[]
   years: number[]
 }) {
+  const exportRows = lagAnalysis.map((l) => ({
+    year: l.year, location: l.location,
+    avgCreatedToSchedDays: l.avgCreatedToSchedDays,
+    avgCreatedToEvalDays: l.avgCreatedToEvalDays,
+    avgSchedToArriveDays: l.avgSchedToArriveDays,
+    caseCount: l.caseCount,
+  }))
+
+  const exportHeaders = [
+    { key: 'year', label: 'Year' }, { key: 'location', label: 'Location' },
+    { key: 'avgCreatedToSchedDays', label: 'Ref→Sched (days)' },
+    { key: 'avgCreatedToEvalDays', label: 'Ref→Eval (days)' },
+    { key: 'avgSchedToArriveDays', label: 'Sched→Arrive (days)' },
+    { key: 'caseCount', label: 'Cases' },
+  ]
+
   return (
     <>
+      <div className="flex justify-end">
+        <ExportButton rows={exportRows} headers={exportHeaders} fileName="speed-to-care" />
+      </div>
       {/* Summary stats per year */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         {annualKPIs.map((a) => {

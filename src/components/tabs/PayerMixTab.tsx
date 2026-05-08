@@ -3,6 +3,7 @@
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
+import ExportButton from '../shared/ExportButton'
 import { O, fmt, fmtN } from '../shared/constants'
 import type { PayerMixRow } from '@/lib/dataEngine'
 
@@ -13,8 +14,20 @@ export default function PayerMixTab({
   payerMix: PayerMixRow[]
   years: number[]
 }) {
+  const exportRows = payerMix.map((p) => ({
+    year: p.year, payerType: p.payerType, count: p.count, pct: p.pct,
+  }))
+
+  const exportHeaders = [
+    { key: 'year', label: 'Year' }, { key: 'payerType', label: 'Payer Type' },
+    { key: 'count', label: 'Cases' }, { key: 'pct', label: '%' },
+  ]
+
   return (
     <>
+      <div className="flex justify-end">
+        <ExportButton rows={exportRows} headers={exportHeaders} fileName="payer-mix" />
+      </div>
       {years.map((yr) => {
         const yrMix = payerMix.filter((p) => p.year === yr).sort((a, b) => b.count - a.count)
         return (
